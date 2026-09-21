@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import threading
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -88,6 +89,16 @@ async def get_ai_analysis(
     """
     system_prompt = load_ai_prompt()
 
+    parsed = urlparse(api_base_url)
+    if parsed.scheme != "https" and parsed.hostname not in (
+        "127.0.0.1",
+        "localhost",
+        "::1",
+    ):
+        raise ValueError(
+            f"Refusing to send the API key to non-HTTPS endpoint {api_base_url!r}"
+        )
+
     url = f"{api_base_url.rstrip('/')}/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -125,7 +136,7 @@ async def get_ai_analysis(
                     if not decoded or not decoded.startswith("data: "):
                         continue
 
-                    data_str = decoded[len("data: "):]
+                    data_str = decoded[len("data: ") :]
                     if data_str == "[DONE]":
                         break
 

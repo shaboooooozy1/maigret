@@ -2,6 +2,7 @@
 import ast
 import asyncio
 import logging
+import os
 import random
 import re
 import ssl
@@ -32,7 +33,6 @@ from .sites import MaigretDatabase, MaigretSite
 from .types import QueryOptions, QueryResultWrapper
 from .utils import ascii_data_display, get_random_user_agent
 
-
 SUPPORTED_IDS = (
     "username",
     "yandex_public_id",
@@ -57,6 +57,7 @@ class SimpleAiohttpChecker(CheckerBase):
         self.proxy = kwargs.get('proxy')
         self.cookie_jar = kwargs.get('cookie_jar')
         self.logger = kwargs.get('logger', Mock())
+        self.verify_ssl = kwargs.get('verify_ssl', True)
         self.url = None
         self.headers = None
         self.allow_redirects = True
@@ -64,7 +65,15 @@ class SimpleAiohttpChecker(CheckerBase):
         self.method = 'get'
         self.payload = None
 
-    def prepare(self, url, headers=None, allow_redirects=True, timeout=0, method='get', payload=None):
+    def prepare(
+        self,
+        url,
+        headers=None,
+        allow_redirects=True,
+        timeout=0,
+        method='get',
+        payload=None,
+    ):
         self.url = url
         self.headers = headers
         self.allow_redirects = allow_redirects
@@ -77,7 +86,15 @@ class SimpleAiohttpChecker(CheckerBase):
         pass
 
     async def _make_request(
-        self, session, url, headers, allow_redirects, timeout, method, logger, payload=None
+        self,
+        session,
+        url,
+        headers,
+        allow_redirects,
+        timeout,
+        method,
+        logger,
+        payload=None,
     ) -> Tuple[Optional[str], int, Optional[CheckError]]:
         try:
             if method.lower() == 'get':
@@ -96,7 +113,11 @@ class SimpleAiohttpChecker(CheckerBase):
                 'timeout': timeout,
             }
             if payload and method.lower() == 'post':
-                if headers and headers.get('Content-Type') == 'application/x-www-form-urlencoded':
+                if (
+                    headers
+                    and headers.get('Content-Type')
+                    == 'application/x-www-form-urlencoded'
+                ):
                     kwargs['data'] = payload
                 else:
                     kwargs['json'] = payload
@@ -139,10 +160,12 @@ class SimpleAiohttpChecker(CheckerBase):
 
         # Use a real SSL context instead of ssl=False to avoid TLS fingerprinting
         # blocks by Cloudflare and similar WAFs. Certificate verification is
-        # disabled to handle sites with invalid/expired certs.
+        # on by default; it can be disabled explicitly (--no-verify-ssl) to
+        # handle sites with invalid/expired certs.
         ssl_context = ssl.create_default_context()
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
+        if not self.verify_ssl:
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
 
         connector = (
             ProxyConnector.from_url(self.proxy)
@@ -178,6 +201,7 @@ class ProxiedAiohttpChecker(SimpleAiohttpChecker):
         self.proxy = kwargs.get('proxy')
         self.cookie_jar = kwargs.get('cookie_jar')
         self.logger = kwargs.get('logger', Mock())
+        self.verify_ssl = kwargs.get('verify_ssl', True)
 
 
 class AiodnsDomainResolver(CheckerBase):
@@ -189,7 +213,15 @@ class AiodnsDomainResolver(CheckerBase):
         self.logger = kwargs.get('logger', Mock())
         self.resolver = aiodns.DNSResolver(loop=loop)
 
-    def prepare(self, url, headers=None, allow_redirects=True, timeout=0, method='get', payload=None):
+    def prepare(
+        self,
+        url,
+        headers=None,
+        allow_redirects=True,
+        timeout=0,
+        method='get',
+        payload=None,
+    ):
         self.url = url
         return None
 
@@ -232,7 +264,15 @@ class CurlCffiChecker(CheckerBase):
         self.method = 'get'
         self.payload = None
 
-    def prepare(self, url, headers=None, allow_redirects=True, timeout=0, method='get', payload=None):
+    def prepare(
+        self,
+        url,
+        headers=None,
+        allow_redirects=True,
+        timeout=0,
+        method='get',
+        payload=None,
+    ):
         self.url = url
         self.headers = headers
         self.allow_redirects = allow_redirects
@@ -251,8 +291,11 @@ class CurlCffiChecker(CheckerBase):
                 # matching UA. Mixing a random UA with a Chrome TLS fingerprint trips
                 # composite bot scoring (e.g. Cloudflare returns a JS challenge for
                 # "Chrome 91 UA + Chrome 131 TLS"). Keep any site-specific custom headers.
-                headers = {k: v for k, v in (self.headers or {}).items()
-                           if k.lower() not in ('user-agent', 'connection')}
+                headers = {
+                    k: v
+                    for k, v in (self.headers or {}).items()
+                    if k.lower() not in ('user-agent', 'connection')
+                }
                 kwargs = {
                     'url': self.url,
                     'headers': headers or None,
@@ -291,7 +334,15 @@ class CheckerMock:
     def __init__(self, *args, **kwargs):
         pass
 
-    def prepare(self, url, headers=None, allow_redirects=True, timeout=0, method='get', payload=None):
+    def prepare(
+        self,
+        url,
+        headers=None,
+        allow_redirects=True,
+        timeout=0,
+        method='get',
+        payload=None,
+    ):
         return None
 
     async def check(self) -> Tuple[Optional[str], int, Optional[CheckError]]:
@@ -332,7 +383,9 @@ def detect_error_page(
 
 
 def debug_response_logging(url, html_text, status_code, check_error):
-    with open("debug.log", "a") as f:
+    # owner-only permissions: the capture contains full response bodies
+    fd = os.open("debug.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(fd, "a") as f:
         status = status_code or "No response"
         f.write(f"url: {url}\nerror: {check_error}\nr: {status}\n")
         if html_text:
@@ -393,7 +446,9 @@ def process_site_result(
         logger.debug(f"Activation for {site.name}")
         method = site.activation["method"]
         try:
-            activate_fun = getattr(ParsingActivator(), method)
+            if method.startswith('_'):
+                raise AttributeError(f'Invalid activation method {method!r}')
+            activate_fun = getattr(ParsingActivator, method)
             # TODO: async call
             activate_fun(site, logger)
         except AttributeError as e:
@@ -607,7 +662,7 @@ def make_site_result(
             url_probe = url_probe.format(
                 urlMain=site.url_main,
                 urlSubpath=site.url_subpath,
-                username=username,
+                username=quote(username),
             )
 
         for k, v in site.get_params.items():
@@ -689,7 +744,9 @@ async def check_site_for_username(
         if marks and any(m in html_text for m in marks):
             method = act["method"]
             try:
-                activate_fun = getattr(ParsingActivator(), method)
+                if method.startswith('_'):
+                    raise AttributeError(f'Invalid activation method {method!r}')
+                activate_fun = getattr(ParsingActivator, method)
                 activate_fun(site, logger, url=checker.url)
             except AttributeError as e:
                 logger.warning(
@@ -761,6 +818,7 @@ async def maigret(
     cookies=None,
     retries=0,
     check_domains=False,
+    verify_ssl=True,
     *args,
     **kwargs,
 ) -> QueryResultWrapper:
@@ -812,21 +870,27 @@ async def maigret(
         cookie_jar = import_aiohttp_cookies(cookies)
 
     clearweb_checker = SimpleAiohttpChecker(
-        proxy=proxy, cookie_jar=cookie_jar, logger=logger
+        proxy=proxy, cookie_jar=cookie_jar, logger=logger, verify_ssl=verify_ssl
     )
 
     # TODO
     tor_checker = CheckerMock()
     if tor_proxy:
         tor_checker = ProxiedAiohttpChecker(  # type: ignore
-            proxy=tor_proxy, cookie_jar=cookie_jar, logger=logger
+            proxy=tor_proxy,
+            cookie_jar=cookie_jar,
+            logger=logger,
+            verify_ssl=verify_ssl,
         )
 
     # TODO
     i2p_checker = CheckerMock()
     if i2p_proxy:
         i2p_checker = ProxiedAiohttpChecker(  # type: ignore
-            proxy=i2p_proxy, cookie_jar=cookie_jar, logger=logger
+            proxy=i2p_proxy,
+            cookie_jar=cookie_jar,
+            logger=logger,
+            verify_ssl=verify_ssl,
         )
 
     # TODO
@@ -1008,7 +1072,9 @@ async def site_self_check(
                 # TODO: make normal checking
                 if site.name not in results_dict:
                     logger.info(results_dict)
-                    changes["issues"].append(f"Site {site.name} not in results (wrong id_type?)")
+                    changes["issues"].append(
+                        f"Site {site.name} not in results (wrong id_type?)"
+                    )
                     if auto_disable:
                         changes["disabled"] = True
                     continue
@@ -1043,7 +1109,9 @@ async def site_self_check(
                     elif status == MaigretCheckStatus.CLAIMED and auto_disable:
                         changes["disabled"] = True
                 elif status == MaigretCheckStatus.CLAIMED:
-                    changes["issues"].append(f"Claimed user '{username}' not detected as claimed")
+                    changes["issues"].append(
+                        f"Claimed user '{username}' not detected as claimed"
+                    )
                     logger.warning(
                         f"Not found `{username}` in {site.name}, must be claimed"
                     )
@@ -1051,8 +1119,12 @@ async def site_self_check(
                     if auto_disable:
                         changes["disabled"] = True
                 else:
-                    changes["issues"].append(f"Unclaimed user '{username}' detected as claimed")
-                    logger.warning(f"Found `{username}` in {site.name}, must be available")
+                    changes["issues"].append(
+                        f"Unclaimed user '{username}' detected as claimed"
+                    )
+                    logger.warning(
+                        f"Found `{username}` in {site.name}, must be available"
+                    )
                     logger.info(results_dict[site.name])
                     if auto_disable:
                         changes["disabled"] = True
@@ -1088,14 +1160,18 @@ async def site_self_check(
         # Only modify site if auto_disable is enabled
         if auto_disable and changes["disabled"] != site.disabled:
             site.disabled = changes["disabled"]
-            logger.info(f"Switching property 'disabled' for {site.name} to {site.disabled}")
+            logger.info(
+                f"Switching property 'disabled' for {site.name} to {site.disabled}"
+            )
             db.update_site(site)
             if not silent:
                 action = "Disabled" if site.disabled else "Enabled"
                 print(f"{action} site {site.name}...")
         elif changes["issues"] and not silent and not diagnose:
             # Report issues without disabling
-            print(f"Issues found in {site.name}: {len(changes['issues'])} (not auto-disabled)")
+            print(
+                f"Issues found in {site.name}: {len(changes['issues'])} (not auto-disabled)"
+            )
 
         # remove service tag "unchecked"
         if "unchecked" in site.tags:
@@ -1157,14 +1233,25 @@ async def self_check(
 
     for _, site in all_sites.items():
         check_coro = site_self_check(
-            site, logger, sem, db, silent, proxy, tor_proxy, i2p_proxy,
-            skip_errors=True, auto_disable=auto_disable, diagnose=diagnose
+            site,
+            logger,
+            sem,
+            db,
+            silent,
+            proxy,
+            tor_proxy,
+            i2p_proxy,
+            skip_errors=True,
+            auto_disable=auto_disable,
+            diagnose=diagnose,
         )
         future = asyncio.ensure_future(check_coro)
         tasks.append((site.name, future))
 
     if tasks:
-        with alive_bar(len(tasks), title='Self-checking', force_tty=True, disable=no_progressbar) as progress:
+        with alive_bar(
+            len(tasks), title='Self-checking', force_tty=True, disable=no_progressbar
+        ) as progress:
             for site_name, f in tasks:
                 try:
                     result = await f

@@ -470,7 +470,12 @@
                 updateHiddenInput();
                 const siteElement = document.createElement('span');
                 siteElement.className = 'selected-site';
-                siteElement.innerHTML = `${site}<span class="remove-site" data-site="${site}">&times;</span>`;
+                siteElement.textContent = site;
+                const removeEl = document.createElement('span');
+                removeEl.className = 'remove-site';
+                removeEl.dataset.site = site;
+                removeEl.innerHTML = '&times;';
+                siteElement.appendChild(removeEl);
                 selectedSitesContainer.appendChild(siteElement);
             }
         }

@@ -30,6 +30,7 @@ DEFAULT_ARGS: Dict[str, Any] = {
     'print_check_errors': False,
     'print_not_found': False,
     'proxy': None,
+    'no_verify_ssl': False,
     'reports_sorting': 'default',
     'retries': 0,
     'self_check': False,
