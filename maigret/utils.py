@@ -6,6 +6,7 @@ import random
 import string
 from typing import Any
 
+from markupsafe import Markup, escape
 
 DEFAULT_USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
@@ -36,10 +37,17 @@ def is_country_tag(tag: str) -> bool:
 
 
 def enrich_link_str(link: str) -> str:
-    link = link.strip()
-    if link.startswith("www.") or (link.startswith("http") and "//" in link):
-        return f'<a class="auto-link" href="{link}">{link}</a>'
+    link = str(link).strip()
+    if link.startswith("www.") or link.startswith(("http://", "https://")):
+        safe = escape(link)
+        return Markup(f'<a class="auto-link" href="{safe}">{safe}</a>')
     return link
+
+
+def safe_filename_part(name: str) -> str:
+    """Strip path separators and control characters from a value used inside a report filename."""
+    cleaned = re.sub(r'[\\/\x00-\x1f]', '_', name).replace('..', '__')
+    return cleaned or '_'
 
 
 class URLMatcher:

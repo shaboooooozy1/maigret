@@ -58,7 +58,9 @@ COMMON_ERRORS = {
         'Censorship', 'MGTS'
     ),
     'Incapsula incident ID': CheckError('Bot protection', 'Incapsula'),
-    '<title>Client Challenge</title>': CheckError('Bot protection', 'Anti-bot challenge'),
+    '<title>Client Challenge</title>': CheckError(
+        'Bot protection', 'Anti-bot challenge'
+    ),
     '<title>DDoS-Guard</title>': CheckError('Bot protection', 'DDoS-Guard'),
     'Сайт заблокирован хостинг-провайдером': CheckError(
         'Site-specific', 'Site is disabled (Beget)'
@@ -79,7 +81,7 @@ ERRORS_TYPES = {
 
 # TODO: checking for reason
 ERRORS_REASONS = {
-    'Login required': 'Add authorization cookies through `--cookies-jar-file` (see cookies.txt)',
+    'Login required': 'Add authorization cookies through `--cookies-jar-file` (see cookies.txt.example)',
 }
 
 TEMPORARY_ERRORS_TYPES = [

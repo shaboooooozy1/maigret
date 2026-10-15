@@ -3,6 +3,7 @@ import json
 import re
 import os
 import logging
+import ssl
 from typing import Any, Dict, List, Optional, Tuple
 
 from aiohttp import ClientSession, TCPConnector
@@ -67,10 +68,13 @@ class Submitter:
             else:
                 cookie_jar = import_aiohttp_cookies(args.cookie_file)
 
-        ssl_context = __import__('ssl').create_default_context()
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = __import__('ssl').CERT_NONE
-        connector = ProxyConnector.from_url(proxy) if proxy else TCPConnector(ssl=ssl_context)
+        ssl_context = ssl.create_default_context()
+        if getattr(self.args, 'no_verify_ssl', False):
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+        connector = (
+            ProxyConnector.from_url(proxy) if proxy else TCPConnector(ssl=ssl_context)
+        )
         self.session = ClientSession(
             connector=connector, trust_env=True, cookie_jar=cookie_jar
         )
@@ -194,7 +198,10 @@ class Submitter:
     # TODO: replace with checking.py/SimpleAiohttpChecker call
     @staticmethod
     async def get_html_response_to_compare(
-        url: str, session: Optional[ClientSession] = None, redirects=False, headers: Optional[Dict] = None
+        url: str,
+        session: Optional[ClientSession] = None,
+        redirects=False,
+        headers: Optional[Dict] = None,
     ):
         assert session is not None, "session must not be None"
         async with session.get(
@@ -410,13 +417,9 @@ class Submitter:
         self.logger.info('Domain is %s', domain_raw)
 
         # check for existence
-        domain_re = re.compile(
-            r'://(www\.)?' + re.escape(domain_raw) + r'(/|$)'
-        )
+        domain_re = re.compile(r'://(www\.)?' + re.escape(domain_raw) + r'(/|$)')
         matched_sites = list(
-            filter(
-                lambda x: domain_re.search(x.url_main + x.url), self.db.sites
-            )
+            filter(lambda x: domain_re.search(x.url_main + x.url), self.db.sites)
         )
 
         if matched_sites:

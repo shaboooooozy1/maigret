@@ -17,7 +17,6 @@ from .result import MaigretCheckStatus
 from .sites import MaigretDatabase
 from .utils import is_country_tag, CaseConverter, enrich_link_str
 
-
 ADDITIONAL_TZINFO = {"CDT": gettz("America/Chicago")}
 SUPPORTED_JSON_REPORT_FORMATS = [
     "simple",
@@ -78,6 +77,13 @@ def save_html_report(filename: str, context: dict):
         f.write(filled_template)
 
 
+def _pdf_link_callback(uri: str, rel: str) -> str:
+    """Only let xhtml2pdf fetch http(s) resources; never local files."""
+    if uri.startswith(("http://", "https://")):
+        return uri
+    return ""
+
+
 def save_pdf_report(filename: str, context: dict):
     template, css = generate_report_template(is_pdf=True)
     filled_template = template.render(**context)
@@ -86,7 +92,12 @@ def save_pdf_report(filename: str, context: dict):
     from xhtml2pdf import pisa  # type: ignore[import-untyped]
 
     with open(filename, "w+b") as f:
-        pisa.pisaDocument(io.StringIO(filled_template), dest=f, default_css=css)
+        pisa.pisaDocument(
+            io.StringIO(filled_template),
+            dest=f,
+            default_css=css,
+            link_callback=_pdf_link_callback,
+        )
 
 
 def save_json_report(filename: str, username: str, results: dict, report_type: str):
@@ -291,7 +302,14 @@ def generate_markdown_report(context: dict, run_info: dict = None) -> str:
             # Map multiple source fields to unified output fields
             field_sources = {
                 "fullname": ("fullname", "name"),
-                "location": ("location", "country", "city", "country_code", "locale", "region"),
+                "location": (
+                    "location",
+                    "country",
+                    "city",
+                    "country_code",
+                    "locale",
+                    "region",
+                ),
                 "gender": ("gender",),
                 "bio": ("bio", "about", "description"),
             }
@@ -313,7 +331,9 @@ def generate_markdown_report(context: dict, run_info: dict = None) -> str:
     lines.append(f"# Report by searching on username \"{username}\"\n")
 
     # Generated line with run info
-    gen_line = f"Generated at {generated_at} by [Maigret](https://github.com/soxoj/maigret)"
+    gen_line = (
+        f"Generated at {generated_at} by [Maigret](https://github.com/soxoj/maigret)"
+    )
     if run_info:
         parts = []
         if run_info.get("sites_count"):
@@ -359,7 +379,9 @@ def generate_markdown_report(context: dict, run_info: dict = None) -> str:
                 continue
 
             lines.append(f"### {site_name}\n")
-            lines.append(f"- **URL:** [{v.get('url_user', '')}]({v.get('url_user', '')})")
+            lines.append(
+                f"- **URL:** [{v.get('url_user', '')}]({v.get('url_user', '')})"
+            )
 
             tags = v.get("status") and v["status"].tags or []
             if tags:
@@ -426,7 +448,7 @@ def generate_report_template(is_pdf: bool):
         template_content = get_resource_content("simple_report.tpl")
         css_content = None
 
-    template = Template(template_content)
+    template = Template(template_content, autoescape=True)
     template.globals["title"] = CaseConverter.snake_to_title  # type: ignore
     template.globals["detect_link"] = enrich_link_str  # type: ignore
     return template, css_content
@@ -569,6 +591,16 @@ def generate_report_context(username_results: list):
     }
 
 
+_CSV_FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r')
+
+
+def _csv_safe(value):
+    """Neutralise spreadsheet formula injection in CSV cells."""
+    if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
 def generate_csv_report(username: str, results: dict, csvfile):
     writer = csv.writer(csvfile)
     writer.writerow(
@@ -581,10 +613,10 @@ def generate_csv_report(username: str, results: dict, csvfile):
             status = str(results[site]["status"].status)
         writer.writerow(
             [
-                username,
-                site,
-                results[site].get("url_main", ""),
-                results[site].get("url_user", ""),
+                _csv_safe(username),
+                _csv_safe(site),
+                _csv_safe(results[site].get("url_main", "")),
+                _csv_safe(results[site].get("url_user", "")),
                 status,
                 results[site].get("http_status", 0),
             ]

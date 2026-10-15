@@ -4,18 +4,29 @@ on:
   push:
     branches: [main, dev]
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       # Wine Python (not Linux) runs PyInstaller; altgraph needs pkg_resources — reinstall setuptools after all deps.
+      # The exe is built from the exact commit being released, not a floating branch archive.
       - name: Prepare requirements for Wine (setuptools last)
+        env:
+          MAIGRET_REPO: ${{ github.repository }}
+          MAIGRET_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          cp pyinstaller/requirements.txt pyinstaller/requirements-wine.txt
+          sed -e "s#^maigret @ .*#maigret @ https://github.com/${MAIGRET_REPO}/archive/${MAIGRET_SHA}.zip#" \
+            pyinstaller/requirements.txt > pyinstaller/requirements-wine.txt
+          grep -q "archive/${MAIGRET_SHA}.zip" pyinstaller/requirements-wine.txt
           {
             echo ""
             echo "# CI: setuptools last so pkg_resources exists for PyInstaller/altgraph in Wine"
@@ -23,27 +34,27 @@ jobs:
           } >> pyinstaller/requirements-wine.txt
 
       - name: PyInstaller Windows Build
-        uses: JackMcKew/pyinstaller-action-windows@main
+        uses: JackMcKew/pyinstaller-action-windows@6736e82336143ca2eb15d13f9b1af90dfd945042 # main as of 2026-09-17
         with:
           path: pyinstaller
           requirements: requirements-wine.txt
 
       - name: Upload PyInstaller Binary to Workflow as Artifact
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: maigret_standalone_win32
           path: pyinstaller/dist/windows
 
       - name: Download PyInstaller Binary
         if: success()
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: maigret_standalone_win32
 
       - name: Create New Release and Upload PyInstaller Binary to Release
         if: success()
-        uses: ncipollo/release-action@v1.14.0
+        uses: ncipollo/release-action@2c591bcc8ecdcd2db72b97d6147f871fcd833ba5 # v1.14.0
         id: create_release
         with:
           allowUpdates: true

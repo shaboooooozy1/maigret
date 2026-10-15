@@ -48,14 +48,14 @@ def _print_warning(msg: str) -> None:
         print(text)
 
 
-DEFAULT_META_URL = (
-    "https://raw.githubusercontent.com/soxoj/maigret/main/maigret/resources/db_meta.json"
-)
+DEFAULT_META_URL = "https://raw.githubusercontent.com/soxoj/maigret/main/maigret/resources/db_meta.json"
 DEFAULT_CHECK_INTERVAL_HOURS = 24
 MAIGRET_HOME = path.expanduser("~/.maigret")
 CACHED_DB_PATH = path.join(MAIGRET_HOME, "data.json")
 STATE_PATH = path.join(MAIGRET_HOME, "autoupdate_state.json")
-BUNDLED_DB_PATH = path.join(path.dirname(path.realpath(__file__)), "resources", "data.json")
+BUNDLED_DB_PATH = path.join(
+    path.dirname(path.realpath(__file__)), "resources", "data.json"
+)
 
 
 def _parse_version(version_str: str) -> tuple:
@@ -127,7 +127,12 @@ def _is_update_available(meta: dict, state: dict) -> bool:
     return remote_date > cached_date
 
 
-def _download_and_verify(data_url: str, expected_sha256: str, timeout: int = 60) -> Optional[str]:
+def _download_and_verify(
+    data_url: str, expected_sha256: str, timeout: int = 60
+) -> Optional[str]:
+    if not data_url.startswith("https://"):
+        _print_warning(f"DB auto-update: refusing non-https database URL {data_url!r}")
+        return None
     _ensure_maigret_home()
     tmp_fd, tmp_path = tempfile.mkstemp(dir=MAIGRET_HOME, suffix=".json")
     try:
@@ -231,7 +236,9 @@ def resolve_db_path(
     _print_info("DB auto-update: checking for updates...")
     meta = _fetch_meta(meta_url)
     if meta is None:
-        _print_warning("DB auto-update: could not reach update server, using local database")
+        _print_warning(
+            "DB auto-update: could not reach update server, using local database"
+        )
         state["last_check_at"] = _now_iso()
         _save_state(state)
         return _best_local()
@@ -259,12 +266,16 @@ def resolve_db_path(
     # Download update
     new_count = meta.get("sites_count", "?")
     old_count = state.get("last_meta", {}).get("sites_count")
-    if old_count:
-        _print_info(f"DB auto-update: downloading updated database ({new_count} sites, was {old_count})...")
-    else:
-        _print_info(f"DB auto-update: downloading database ({new_count} sites)...")
-
     data_url = meta.get("data_url", "")
+    if old_count:
+        _print_info(
+            f"DB auto-update: downloading updated database ({new_count} sites, was {old_count}) from {data_url}..."
+        )
+    else:
+        _print_info(
+            f"DB auto-update: downloading database ({new_count} sites) from {data_url}..."
+        )
+
     expected_sha = meta.get("data_sha256", "")
     result = _download_and_verify(data_url, expected_sha)
 
@@ -321,12 +332,16 @@ def force_update(
         _save_state(state)
         return False
 
-    if old_count:
-        _print_info(f"DB update: downloading updated database ({new_count} sites, was {old_count})...")
-    else:
-        _print_info(f"DB update: downloading database ({new_count} sites)...")
-
     data_url = meta.get("data_url", "")
+    if old_count:
+        _print_info(
+            f"DB update: downloading updated database ({new_count} sites, was {old_count}) from {data_url}..."
+        )
+    else:
+        _print_info(
+            f"DB update: downloading database ({new_count} sites) from {data_url}..."
+        )
+
     expected_sha = meta.get("data_sha256", "")
     result = _download_and_verify(data_url, expected_sha)
 

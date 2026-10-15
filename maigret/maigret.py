@@ -42,7 +42,7 @@ from .report import (
 from .sites import MaigretDatabase
 from .submit import Submitter
 from .types import QueryResultWrapper
-from .utils import get_dict_ascii_tree
+from .utils import get_dict_ascii_tree, safe_filename_part
 from .settings import Settings
 from .permutator import Permute
 
@@ -248,6 +248,13 @@ def setup_arguments_parser(settings: Settings):
         dest="proxy",
         default=settings.proxy_url,
         help="Make requests over a proxy. e.g. socks5://127.0.0.1:1080",
+    )
+    parser.add_argument(
+        "--no-verify-ssl",
+        action="store_true",
+        dest="no_verify_ssl",
+        default=False,
+        help="Do not verify TLS certificates of checked sites (insecure; do not combine with --cookies-jar-file)",
     )
     parser.add_argument(
         "--tor-proxy",
@@ -614,6 +621,11 @@ async def main():
         silent=args.ai,
     )
 
+    if args.no_verify_ssl and args.cookie_file:
+        query_notify.warning(
+            'WARNING: --no-verify-ssl with --cookies-jar-file sends your session cookies over unverified TLS'
+        )
+
     # Create object with all information about sites we are aware of.
     try:
         db = MaigretDatabase().load_from_path(db_file)
@@ -621,9 +633,7 @@ async def main():
     except Exception as e:
         logger.warning(f"Failed to load database from {db_file}: {e}")
         if db_file != BUNDLED_DB_PATH:
-            query_notify.warning(
-                f'Falling back to bundled database: {BUNDLED_DB_PATH}'
-            )
+            query_notify.warning(f'Falling back to bundled database: {BUNDLED_DB_PATH}')
             db = MaigretDatabase().load_from_path(BUNDLED_DB_PATH)
             query_notify.success(
                 f'Using sites database: {BUNDLED_DB_PATH} ({len(db.sites)} sites)'
@@ -711,8 +721,18 @@ async def main():
             args.web if args.web else 5000
         )  # args.web is either the specified port or 5000 by default
 
-        # Host configuration: secure by default, but allow override via environment
+        # Host configuration: secure by default, but allow override via environment.
+        # A non-loopback bind exposes an unauthenticated scanner, so require a
+        # shared token (MAIGRET_WEB_TOKEN) or an explicit insecure opt-in.
         host = os.getenv('FLASK_HOST', '127.0.0.1')
+        if host not in ('127.0.0.1', 'localhost', '::1') and not (
+            os.getenv('MAIGRET_WEB_TOKEN') or os.getenv('MAIGRET_WEB_INSECURE') == '1'
+        ):
+            query_notify.warning(
+                'Refusing to bind the web UI to %s without MAIGRET_WEB_TOKEN (or MAIGRET_WEB_INSECURE=1)'
+                % host
+            )
+            sys.exit(1)
         app.run(host=host, port=port)
         return
 
@@ -804,6 +824,7 @@ async def main():
             no_progressbar=args.no_progressbar,
             retries=args.retries,
             check_domains=args.with_domains,
+            verify_ssl=not args.no_verify_ssl,
         )
 
         if not args.ai:
@@ -826,25 +847,25 @@ async def main():
 
         # reporting for a one username
         if args.xmind:
-            username = username.replace('/', '_')
+            username = safe_filename_part(username)
             filename = report_filepath_tpl.format(username=username, postfix='.xmind')
             save_xmind_report(filename, username, results)
             query_notify.warning(f'XMind report for {username} saved in {filename}')
 
         if args.csv:
-            username = username.replace('/', '_')
+            username = safe_filename_part(username)
             filename = report_filepath_tpl.format(username=username, postfix='.csv')
             save_csv_report(filename, username, results)
             query_notify.warning(f'CSV report for {username} saved in {filename}')
 
         if args.txt:
-            username = username.replace('/', '_')
+            username = safe_filename_part(username)
             filename = report_filepath_tpl.format(username=username, postfix='.txt')
             save_txt_report(filename, username, results)
             query_notify.warning(f'TXT report for {username} saved in {filename}')
 
         if args.json:
-            username = username.replace('/', '_')
+            username = safe_filename_part(username)
             filename = report_filepath_tpl.format(
                 username=username, postfix=f'_{args.json}.json'
             )
@@ -862,7 +883,7 @@ async def main():
         username = report_context['username']
 
         if args.html:
-            username = username.replace('/', '_')
+            username = safe_filename_part(username)
             filename = report_filepath_tpl.format(
                 username=username, postfix='_plain.html'
             )
@@ -870,13 +891,13 @@ async def main():
             query_notify.warning(f'HTML report on all usernames saved in {filename}')
 
         if args.pdf:
-            username = username.replace('/', '_')
+            username = safe_filename_part(username)
             filename = report_filepath_tpl.format(username=username, postfix='.pdf')
             save_pdf_report(filename, report_context)
             query_notify.warning(f'PDF report on all usernames saved in {filename}')
 
         if args.md:
-            username = username.replace('/', '_')
+            username = safe_filename_part(username)
             filename = report_filepath_tpl.format(username=username, postfix='.md')
             run_flags = []
             if args.tags:
@@ -890,10 +911,12 @@ async def main():
                 "flags": " ".join(run_flags) if run_flags else None,
             }
             save_markdown_report(filename, report_context, run_info=run_info)
-            query_notify.warning(f'Markdown report on all usernames saved in {filename}')
+            query_notify.warning(
+                f'Markdown report on all usernames saved in {filename}'
+            )
 
         if args.graph:
-            username = username.replace('/', '_')
+            username = safe_filename_part(username)
             filename = report_filepath_tpl.format(
                 username=username, postfix='_graph.html'
             )

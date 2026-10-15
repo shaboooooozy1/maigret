@@ -149,14 +149,17 @@ Two image variants are published:
 # official image (CLI)
 docker pull soxoj/maigret
 
-# CLI usage
-docker run -v /mydir:/app/reports soxoj/maigret:latest username --html
+# CLI usage (the image runs as an unprivileged user, so pass your uid/gid for bind mounts)
+docker run --user "$(id -u):$(id -g)" -v /mydir:/app/reports soxoj/maigret:latest username --html
 
-# Web UI (open http://localhost:5000)
-docker run -p 5000:5000 soxoj/maigret:web
+# Web UI: set a shared token, then open http://localhost:5000/?token=change-me once
+docker run -e MAIGRET_WEB_TOKEN=change-me -p 5000:5000 soxoj/maigret:web
+
+# Web UI without a token: publish on loopback only and opt in explicitly
+docker run -e MAIGRET_WEB_INSECURE=1 -p 127.0.0.1:5000:5000 soxoj/maigret:web
 
 # Web UI on a custom port
-docker run -e PORT=8080 -p 8080:8080 soxoj/maigret:web
+docker run -e MAIGRET_WEB_TOKEN=change-me -e PORT=8080 -p 8080:8080 soxoj/maigret:web
 
 # manual build
 docker build -t maigret .                  # CLI image (default target)
@@ -214,6 +217,14 @@ maigret --web 5000
 ```
 
 Open http://127.0.0.1:5000, enter a username, and view results.
+
+The web UI binds to `127.0.0.1` by default. To expose it on another interface
+(`FLASK_HOST=0.0.0.0`), set `MAIGRET_WEB_TOKEN=<secret>` and open
+`http://<host>:5000/?token=<secret>` once (or send the `X-Maigret-Token` header);
+`MAIGRET_WEB_INSECURE=1` skips the token check. Reports are written to a private
+temporary directory unless `MAIGRET_REPORTS_DIR` is set. Proxy URLs entered in the
+form must point at `127.0.0.1`/`localhost`; set `MAIGRET_ALLOWED_PROXY_HOSTS` (comma-separated)
+to allow a remote proxy host.
 
 ### Python library
 

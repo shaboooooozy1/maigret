@@ -7,13 +7,20 @@ from flask import (
     flash,
     redirect,
     url_for,
+    session,
+    abort,
 )
+import hmac
 import logging
 import os
+import re
+import secrets
+import tempfile
 import asyncio
 from datetime import datetime
 from threading import Thread
-from typing import Any, Dict
+from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 import maigret
 import maigret.settings
 from maigret.sites import MaigretDatabase
@@ -28,10 +35,59 @@ background_jobs: Dict[str, Any] = {}
 job_results = {}
 
 # Configuration
-app.config["MAIGRET_DB_FILE"] = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'resources', 'data.json')
+app.config["MAIGRET_DB_FILE"] = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), 'resources', 'data.json'
+)
 app.config["COOKIES_FILE"] = "cookies.txt"
 app.config["UPLOAD_FOLDER"] = 'uploads'
-app.config["REPORTS_FOLDER"] = os.path.abspath('/tmp/maigret_reports')
+# Private (0700) random report root unless the operator pins a directory explicitly
+app.config["REPORTS_FOLDER"] = os.environ.get(
+    "MAIGRET_REPORTS_DIR"
+) or tempfile.mkdtemp(prefix="maigret_reports_")
+
+# Web workload clamps (caller-controlled values)
+MAX_USERNAMES = 20
+MAX_TIMEOUT = 300
+
+# Outbound proxy allowlist for request-supplied proxy URLs (SSRF guard)
+ALLOWED_PROXY_SCHEMES = {'http', 'https', 'socks4', 'socks5', 'socks5h'}
+ALLOWED_PROXY_HOSTS = {
+    h.strip()
+    for h in os.getenv('MAIGRET_ALLOWED_PROXY_HOSTS', '127.0.0.1,localhost,::1').split(
+        ','
+    )
+    if h.strip()
+}
+
+
+def validate_proxy(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    parsed = urlparse(value)
+    if parsed.scheme not in ALLOWED_PROXY_SCHEMES or not parsed.hostname:
+        raise ValueError(f'Unsupported proxy URL: {value}')
+    if parsed.hostname not in ALLOWED_PROXY_HOSTS:
+        raise ValueError(f'Proxy host not allowed: {parsed.hostname}')
+    return value
+
+
+@app.before_request
+def _web_access_control():
+    # CSRF: reject cross-origin state-changing requests (no auth cookie exists, so Origin is the boundary)
+    if request.method == 'POST':
+        origin = request.headers.get('Origin')
+        if origin and origin != request.host_url.rstrip('/'):
+            abort(403)
+    expected = os.getenv('MAIGRET_WEB_TOKEN')
+    if not expected:
+        return None  # loopback-only default; see maigret.py guard
+    if session.get('maigret_authed'):
+        return None
+    supplied = request.headers.get('X-Maigret-Token') or request.args.get('token', '')
+    if supplied and hmac.compare_digest(supplied, expected):
+        session['maigret_authed'] = True
+        return None
+    abort(401)
 
 
 def setup_logger(log_level, name):
@@ -71,7 +127,12 @@ async def maigret_search(username, options):
             timeout=int(options.get('timeout', 30)),
             logger=logger,
             id_type='username',
-            cookies=app.config["COOKIES_FILE"] if options.get('use_cookies') else None,
+            cookies=(
+                app.config["COOKIES_FILE"]
+                if options.get('use_cookies')
+                and os.path.exists(app.config["COOKIES_FILE"])
+                else None
+            ),
             is_parsing_enabled=(not options.get('disable_extracting', False)),
             recursive_search_enabled=(
                 not options.get('disable_recursive_search', False)
@@ -122,7 +183,8 @@ def process_search_task(usernames, options, timestamp):
 
         individual_reports = []
         for username, id_type, results in general_results:
-            report_base = os.path.join(session_folder, f"report_{username}")
+            safe_name = re.sub(r'[^A-Za-z0-9._-]', '_', username) or 'user'
+            report_base = os.path.join(session_folder, f"report_{safe_name}")
 
             csv_path = f"{report_base}.csv"
             json_path = f"{report_base}.json"
@@ -161,16 +223,16 @@ def process_search_task(usernames, options, timestamp):
                 {
                     'username': username,
                     'csv_file': os.path.join(
-                        f"search_{timestamp}", f"report_{username}.csv"
+                        f"search_{timestamp}", f"report_{safe_name}.csv"
                     ),
                     'json_file': os.path.join(
-                        f"search_{timestamp}", f"report_{username}.json"
+                        f"search_{timestamp}", f"report_{safe_name}.json"
                     ),
                     'pdf_file': os.path.join(
-                        f"search_{timestamp}", f"report_{username}.pdf"
+                        f"search_{timestamp}", f"report_{safe_name}.pdf"
                     ),
                     'html_file': os.path.join(
-                        f"search_{timestamp}", f"report_{username}.html"
+                        f"search_{timestamp}", f"report_{safe_name}.html"
                     ),
                     'claimed_profiles': claimed_profiles,
                 }
@@ -222,9 +284,29 @@ def search():
     usernames = [
         u.strip() for u in usernames_input.replace(',', ' ').split() if u.strip()
     ]
+    if len(usernames) > MAX_USERNAMES:
+        flash(f'At most {MAX_USERNAMES} usernames per search', 'danger')
+        return redirect(url_for('index'))
 
-    # Create timestamp for this search session
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    try:
+        timeout = max(1, min(int(request.form.get('timeout') or 30), MAX_TIMEOUT))
+        top_sites = max(1, int(request.form.get('top_sites') or 500))
+    except ValueError:
+        flash('timeout and top_sites must be integers', 'danger')
+        return redirect(url_for('index'))
+
+    try:
+        proxy = validate_proxy(request.form.get('proxy'))
+        tor_proxy = validate_proxy(request.form.get('tor_proxy'))
+        i2p_proxy = validate_proxy(request.form.get('i2p_proxy'))
+    except ValueError as e:
+        flash(str(e), 'danger')
+        return redirect(url_for('index'))
+
+    # Create an unguessable session id for this search (readable stamp + random suffix)
+    timestamp = (
+        datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + secrets.token_urlsafe(9)
+    )
 
     # Get selected tags - ensure it's a list
     selected_tags = request.form.getlist('tags')
@@ -232,16 +314,16 @@ def search():
     logging.info(f"Selected tags: {selected_tags}, Excluded tags: {excluded_tags}")
 
     options = {
-        'top_sites': request.form.get('top_sites') or '500',
-        'timeout': request.form.get('timeout') or '30',
+        'top_sites': str(top_sites),
+        'timeout': str(timeout),
         'use_cookies': 'use_cookies' in request.form,
         'all_sites': 'all_sites' in request.form,
         'disable_recursive_search': 'disable_recursive_search' in request.form,
         'disable_extracting': 'disable_extracting' in request.form,
         'with_domains': 'with_domains' in request.form,
-        'proxy': request.form.get('proxy', None) or None,
-        'tor_proxy': request.form.get('tor_proxy', None) or None,
-        'i2p_proxy': request.form.get('i2p_proxy', None) or None,
+        'proxy': proxy,
+        'tor_proxy': tor_proxy,
+        'i2p_proxy': i2p_proxy,
         'permute': 'permute' in request.form,
         'tags': selected_tags,  # Pass selected tags as a list
         'excluded_tags': excluded_tags,  # Pass excluded tags as a list
@@ -319,18 +401,17 @@ def results(session_id):
         usernames=result_data['usernames'],
         graph_file=result_data['graph_file'],
         individual_reports=result_data['individual_reports'],
-        timestamp=session_id.replace('search_', ''),
+        timestamp=session_id.replace('search_', '').rsplit('_', 1)[0],
     )
 
 
 @app.route('/reports/<path:filename>')
 def download_report(filename):
     try:
-        os.makedirs(app.config["REPORTS_FOLDER"], exist_ok=True)
-        file_path = os.path.normpath(
-            os.path.join(app.config["REPORTS_FOLDER"], filename)
-        )
-        if not file_path.startswith(app.config["REPORTS_FOLDER"]):
+        base = os.path.realpath(app.config["REPORTS_FOLDER"])
+        os.makedirs(base, exist_ok=True)
+        file_path = os.path.realpath(os.path.join(base, filename))
+        if os.path.commonpath([base, file_path]) != base:
             raise Exception("Invalid file path")
         return send_file(file_path)
     except Exception as e:

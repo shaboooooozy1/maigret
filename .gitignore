@@ -40,6 +40,18 @@ htmlcov/
 # Maigret files
 settings.json
 
+# Secrets / credentials (never commit)
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+credentials*.json
+debug.log
+cookies.txt
+
 # other
 *.egg-info
 build

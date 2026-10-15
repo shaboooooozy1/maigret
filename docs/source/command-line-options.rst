@@ -64,7 +64,8 @@ gather all results. The choice of the right timeout should be carried
 out taking into account the bandwidth of the Internet connection.
 
 ``--cookies-jar-file`` - File with custom cookies in Netscape format
-(aka cookies.txt). You can install an extension to your browser to
+(aka cookies.txt; see ``cookies.txt.example`` in the repository for the
+format). You can install an extension to your browser to
 download own cookies (`Chrome <https://chrome.google.com/webstore/detail/get-cookiestxt/bgaddhkoddajcdgocldbbfleckgcbcid>`_, `Firefox <https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/>`_).
 
 ``--no-recursion`` - Disable parsing pages for other usernames and

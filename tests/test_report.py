@@ -8,6 +8,7 @@ from io import StringIO
 
 import xmind  # type: ignore[import-untyped]
 from jinja2 import Template
+from markupsafe import escape
 
 from maigret.report import (
     filter_supposed_data,
@@ -29,7 +30,6 @@ from maigret.report import (
 )
 from maigret.result import MaigretCheckResult, MaigretCheckStatus
 from maigret.sites import MaigretSite
-
 
 GOOD_RESULT = MaigretCheckResult('', '', '', MaigretCheckStatus.CLAIMED)
 BAD_RESULT = MaigretCheckResult('', '', '', MaigretCheckStatus.AVAILABLE)
@@ -413,7 +413,7 @@ def test_html_report():
 
     report_text = open(report_name).read()
 
-    assert SUPPOSED_BRIEF in report_text
+    assert str(escape(SUPPOSED_BRIEF)) in report_text
     assert SUPPOSED_GEO in report_text
     assert SUPPOSED_INTERESTS in report_text
 
@@ -545,7 +545,10 @@ def test_md_format_value_list():
 
 
 def test_md_format_value_url():
-    assert _md_format_value('https://example.com') == '[https://example.com](https://example.com)'
+    assert (
+        _md_format_value('https://example.com')
+        == '[https://example.com](https://example.com)'
+    )
     assert _md_format_value('http://x.y') == '[http://x.y](http://x.y)'
 
 
@@ -639,7 +642,9 @@ def _markdown_context_with_rich_ids():
 def test_save_markdown_report():
     filename = 'report_test.md'
     context = _markdown_context_with_rich_ids()
-    save_markdown_report(filename, context, run_info={'sites_count': 100, 'flags': '--top-sites 100'})
+    save_markdown_report(
+        filename, context, run_info={'sites_count': 100, 'flags': '--top-sites 100'}
+    )
     with open(filename) as f:
         content = f.read()
     assert '# Report by searching on username "alice"' in content
